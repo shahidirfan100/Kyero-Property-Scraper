@@ -1,0 +1,154 @@
+{
+  "actorSpecification": 1,
+  "fields": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "id": {
+        "title": "ID",
+        "type": "integer",
+        "description": "Kyero property ID."
+      },
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "description": "Listing title."
+      },
+      "price": {
+        "title": "Price",
+        "type": "number",
+        "description": "Numeric listing price."
+      },
+      "price_formatted": {
+        "title": "Price formatted",
+        "type": "string",
+        "description": "Formatted listing price."
+      },
+      "payment_scheme": {
+        "title": "Payment scheme",
+        "type": "string",
+        "description": "Sale or rent listing type."
+      },
+      "location_id": {
+        "title": "Location ID",
+        "type": "integer",
+        "description": "Location identifier."
+      },
+      "bedroom_count": {
+        "title": "Bedrooms",
+        "type": "integer",
+        "description": "Number of bedrooms."
+      },
+      "bathroom_count": {
+        "title": "Bathrooms",
+        "type": "integer",
+        "description": "Number of bathrooms."
+      },
+      "built_m2": {
+        "title": "Built area m2",
+        "type": "number",
+        "description": "Built area in square meters."
+      },
+      "plot_m2": {
+        "title": "Plot area m2",
+        "type": "number",
+        "description": "Plot area in square meters."
+      },
+      "property_url": {
+        "title": "Property URL",
+        "type": "string",
+        "description": "Absolute URL to the property page."
+      },
+      "search_url": {
+        "title": "Search URL",
+        "type": "string",
+        "description": "Search result URL used for extraction."
+      },
+      "page": {
+        "title": "Page",
+        "type": "integer",
+        "description": "Result page number."
+      },
+      "fetched_at": {
+        "title": "Fetched at",
+        "type": "string",
+        "description": "ISO timestamp when the listing was saved."
+      }
+    },
+    "additionalProperties": true
+  },
+  "views": {
+    "overview": {
+      "title": "Overview",
+      "transformation": {
+        "fields": [
+          "id",
+          "name",
+          "price_formatted",
+          "payment_scheme",
+          "bedroom_count",
+          "bathroom_count",
+          "built_m2",
+          "plot_m2",
+          "property_url",
+          "search_url",
+          "page",
+          "fetched_at"
+        ]
+      },
+      "display": {
+        "component": "table",
+        "properties": {
+          "id": {
+            "label": "ID",
+            "format": "number"
+          },
+          "name": {
+            "label": "Name",
+            "format": "text"
+          },
+          "price_formatted": {
+            "label": "Price",
+            "format": "text"
+          },
+          "payment_scheme": {
+            "label": "Type",
+            "format": "text"
+          },
+          "bedroom_count": {
+            "label": "Bedrooms",
+            "format": "number"
+          },
+          "bathroom_count": {
+            "label": "Bathrooms",
+            "format": "number"
+          },
+          "built_m2": {
+            "label": "Built m2",
+            "format": "number"
+          },
+          "plot_m2": {
+            "label": "Plot m2",
+            "format": "number"
+          },
+          "property_url": {
+            "label": "Property URL",
+            "format": "link"
+          },
+          "search_url": {
+            "label": "Search URL",
+            "format": "link"
+          },
+          "page": {
+            "label": "Page",
+            "format": "number"
+          },
+          "fetched_at": {
+            "label": "Fetched At",
+            "format": "date"
+          }
+        }
+      }
+    }
+  }
+}

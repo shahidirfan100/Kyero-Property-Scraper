@@ -1,0 +1,87 @@
+{
+  "title": "Kyero Property Scraper",
+  "description": "Extract property listings from Kyero search pages. Use direct URLs or location keywords.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "urls": {
+      "title": "Search URLs",
+      "type": "array",
+      "description": "One or more Kyero search result URLs.",
+      "editor": "stringList",
+      "prefill": [
+        "https://www.kyero.com/en/italy-property-for-sale-0l55732"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "keyword": {
+      "title": "Keyword",
+      "type": "string",
+      "description": "Location keyword when URLs are not provided.",
+      "editor": "textfield",
+      "prefill": "italy"
+    },
+    "location": {
+      "title": "Location",
+      "type": "string",
+      "description": "Optional extra location phrase used together with keyword.",
+      "editor": "textfield",
+      "prefill": ""
+    },
+    "listing_type": {
+      "title": "Listing type",
+      "type": "string",
+      "description": "Choose property sales or long-term rentals.",
+      "editor": "select",
+      "default": "for_sale",
+      "prefill": "for_sale",
+      "enum": [
+        "for_sale",
+        "to_rent"
+      ],
+      "enumTitles": [
+        "For Sale",
+        "To Rent"
+      ]
+    },
+    "locale": {
+      "title": "Locale",
+      "type": "string",
+      "description": "Language locale used for Kyero requests.",
+      "editor": "textfield",
+      "default": "en",
+      "prefill": "en"
+    },
+    "results_wanted": {
+      "title": "Results wanted",
+      "type": "integer",
+      "description": "Maximum number of listings to store.",
+      "minimum": 1,
+      "default": 20,
+      "prefill": 20,
+      "editor": "number"
+    },
+    "max_pages": {
+      "title": "Max pages",
+      "type": "integer",
+      "description": "Maximum pages to fetch per search URL.",
+      "minimum": 1,
+      "default": 3,
+      "prefill": 3,
+      "editor": "number"
+    },
+    "proxyConfiguration": {
+      "title": "Proxy configuration",
+      "type": "object",
+      "description": "Recommended for reliable extraction.",
+      "editor": "proxy",
+      "default": {
+        "useApifyProxy": true
+      }
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

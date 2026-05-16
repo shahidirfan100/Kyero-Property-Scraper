@@ -21,7 +21,8 @@
       "type": "string",
       "description": "Location keyword when URLs are not provided.",
       "editor": "textfield",
-      "prefill": "italy"
+      "prefill": "italy",
+      "default": "italy"
     },
     "location": {
       "title": "Location",

@@ -176,7 +176,6 @@ async function requestUrl({
                 headers: {
                     accept,
                     'accept-language': 'en-US,en;q=0.9',
-                    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
                     'x-requested-with': 'XMLHttpRequest',
                     ...(remixData ? { 'x-remix-data': 'yes' } : {}),
                     ...(referer ? { referer } : {}),
@@ -348,22 +347,34 @@ async function collectFromSearchUrl({
 
 await Actor.main(async () => {
     const input = (await Actor.getInput()) || {};
-    const locale = normalizeLocale(input.locale);
-    const listingType = normalizeListingType(input.listing_type);
-    const resultsWanted = normalizePositiveInt(input.results_wanted, 20);
-    const maxPages = normalizePositiveInt(input.max_pages, 3);
-    const keyword = typeof input.keyword === 'string' ? input.keyword.trim() : '';
-    const location = typeof input.location === 'string' ? input.location.trim() : '';
+
+    const {
+        urls = [],
+        keyword = '',
+        location = '',
+        listing_type: listingTypeInput = 'for_sale',
+        locale: inputLocale = 'en',
+        results_wanted: resultsWantedInput = 20,
+        max_pages: maxPagesInput = 3,
+        proxyConfiguration: proxyConfigInput,
+    } = input;
+
+    const locale = normalizeLocale(inputLocale);
+    const listingType = normalizeListingType(listingTypeInput);
+    const resultsWanted = normalizePositiveInt(resultsWantedInput, 20);
+    const maxPages = normalizePositiveInt(maxPagesInput, 3);
+    const trimmedKeyword = typeof keyword === 'string' ? keyword.trim() : '';
+    const trimmedLocation = typeof location === 'string' ? location.trim() : '';
 
     let proxyConfiguration;
-    if (input.proxyConfiguration && !shouldDisableProxyLocally(input.proxyConfiguration)) {
-        proxyConfiguration = await Actor.createProxyConfiguration(input.proxyConfiguration);
+    if (proxyConfigInput && !shouldDisableProxyLocally(proxyConfigInput)) {
+        proxyConfiguration = await Actor.createProxyConfiguration(proxyConfigInput);
     }
-    if (!proxyConfiguration && input.proxyConfiguration?.useApifyProxy) {
+    if (!proxyConfiguration && proxyConfigInput?.useApifyProxy) {
         log.warning('Apify Proxy disabled for this run (missing local credentials).');
     }
 
-    const rawInputUrls = normalizeList(input.urls);
+    const rawInputUrls = normalizeList(urls);
     let searchUrls = [];
     for (const inputUrl of rawInputUrls) {
         try {
@@ -375,9 +386,9 @@ await Actor.main(async () => {
 
     if (!searchUrls.length) {
         const queryCandidates = [];
-        if (location) queryCandidates.push(location);
-        if (keyword) queryCandidates.push(keyword);
-        if (keyword && location) queryCandidates.push(`${keyword} ${location}`);
+        if (trimmedLocation) queryCandidates.push(trimmedLocation);
+        if (trimmedKeyword) queryCandidates.push(trimmedKeyword);
+        if (trimmedKeyword && trimmedLocation) queryCandidates.push(`${trimmedKeyword} ${trimmedLocation}`);
 
         const uniqueCandidates = [...new Set(queryCandidates.map((q) => q.trim()).filter(Boolean))];
         if (!uniqueCandidates.length) throw new Error('Provide either "urls" or at least one of "keyword"/"location".');
@@ -395,7 +406,7 @@ await Actor.main(async () => {
         log.info(`Keyword discovery matched "${matchedQuery}" with ${suggestions.length} suggestion(s).`);
 
         const pathKey = listingType === 'to_rent' ? 'to_rent_path' : 'for_sale_path';
-        const selectedSuggestions = location ? suggestions.slice(0, 1) : suggestions;
+        const selectedSuggestions = trimmedLocation ? suggestions.slice(0, 1) : suggestions;
         searchUrls = selectedSuggestions
             .map((suggestion) => suggestion[pathKey])
             .filter((path) => typeof path === 'string' && path.trim())

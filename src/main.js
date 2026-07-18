@@ -1,13 +1,27 @@
 import { Actor, log } from 'apify';
 import { Dataset } from 'crawlee';
-import { gotScraping } from 'got-scraping';
+import { Impit } from 'impit';
 
 const KYERO_ORIGIN = 'https://www.kyero.com';
 const ROUTE_ID = 'routes/properties/search/routes/index.route';
-const SEARCH_DATA_ACCEPT = 'text/x-script, text/plain, application/json, */*';
-const JSON_ACCEPT = 'application/json, text/plain, */*';
 const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524]);
 const MAX_HTTP_ATTEMPTS = 4;
+const impitClients = new Map();
+
+function getImpitClient(proxyUrl) {
+    const key = proxyUrl || '__direct__';
+    if (!impitClients.has(key)) {
+        impitClients.set(
+            key,
+            new Impit({
+                browser: 'chrome',
+                ignoreTlsErrors: true,
+                ...(proxyUrl && { proxyUrl }),
+            }),
+        );
+    }
+    return impitClients.get(key);
+}
 
 function normalizeList(value) {
     if (!value) return [];
@@ -47,6 +61,33 @@ function sleep(ms) {
     });
 }
 
+function getRetryAfterMs(headers) {
+    const retryAfter = headers?.get?.('retry-after');
+    if (!retryAfter) return 0;
+
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+
+    const dateMs = Date.parse(retryAfter);
+    if (Number.isFinite(dateMs)) return Math.max(0, dateMs - Date.now());
+
+    return 0;
+}
+
+function getRetryDelayMs(statusCode, attempt, headers) {
+    const retryAfterMs = getRetryAfterMs(headers);
+    if (retryAfterMs > 0) {
+        const maxRetryAfterMs = statusCode === 429 ? 25000 : 8000;
+        return Math.min(retryAfterMs, maxRetryAfterMs) + Math.floor(Math.random() * 2500);
+    }
+
+    if (statusCode === 429) {
+        return Math.min(25000, 3000 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 2500);
+    }
+
+    return 800 * attempt + Math.floor(Math.random() * 700);
+}
+
 function isRetryableError(error) {
     const message = String(error?.message || '').toLowerCase();
     return [
@@ -72,6 +113,17 @@ function shouldDisableProxyLocally(proxyConfigInput) {
     if (!proxyConfigInput?.useApifyProxy) return false;
     if (process.env.APIFY_IS_AT_HOME === '1') return false;
     return !process.env.APIFY_PROXY_PASSWORD && !process.env.APIFY_TOKEN;
+}
+
+function normalizeProxyConfig(proxyConfigInput) {
+    if (!proxyConfigInput?.useApifyProxy) return proxyConfigInput;
+    if (Array.isArray(proxyConfigInput.apifyProxyGroups) && proxyConfigInput.apifyProxyGroups.length) {
+        return proxyConfigInput;
+    }
+    return {
+        ...proxyConfigInput,
+        apifyProxyGroups: ['RESIDENTIAL'],
+    };
 }
 
 function prepareSearchUrl(inputUrl, locale) {
@@ -155,11 +207,17 @@ function extractSearchPayloadFromPacked(body) {
     return payload;
 }
 
+function normalizePropertyImageUrls(images) {
+    if (!Array.isArray(images)) return [];
+    return [...new Set(images.filter((image) => typeof image === 'string' && image.trim()).map((image) => {
+        return image.trim().replace('/crop/480x320/', '/crop/960x720/');
+    }))];
+}
+
 async function requestUrl({
     url,
     proxyConfiguration,
     referer,
-    accept,
     remixData = false,
 }) {
     let lastError;
@@ -168,34 +226,33 @@ async function requestUrl({
     for (let attempt = 1; attempt <= MAX_HTTP_ATTEMPTS; attempt++) {
         const proxyUrl = useProxy ? await proxyConfiguration.newUrl() : undefined;
         try {
-            const response = await gotScraping({
-                url: url.toString(),
-                proxyUrl,
-                throwHttpErrors: false,
-                timeout: { request: 30000 },
+            const client = getImpitClient(proxyUrl);
+            const response = await client.fetch(url.toString(), {
                 headers: {
-                    accept,
-                    'accept-language': 'en-US,en;q=0.9',
                     'x-requested-with': 'XMLHttpRequest',
                     ...(remixData ? { 'x-remix-data': 'yes' } : {}),
                     ...(referer ? { referer } : {}),
                 },
             });
+            const body = await response.text();
 
-            if (response.statusCode === 407 && useProxy) {
+            if (response.status === 407 && useProxy) {
                 useProxy = false;
                 log.warning('Proxy authentication failed (407). Retrying without proxy.', { url: url.toString() });
                 continue;
             }
 
-            if (RETRYABLE_STATUS_CODES.has(response.statusCode) && attempt < MAX_HTTP_ATTEMPTS) {
-                const waitMs = 600 * attempt + Math.floor(Math.random() * 400);
-                log.warning(`Retryable status ${response.statusCode}, retrying in ${waitMs}ms`, { url: url.toString(), attempt });
+            if (RETRYABLE_STATUS_CODES.has(response.status) && attempt < MAX_HTTP_ATTEMPTS) {
+                const waitMs = getRetryDelayMs(response.status, attempt, response.headers);
+                log.debug(`Retryable status ${response.status}, retrying in ${Math.round(waitMs / 1000)}s`, { url: url.toString(), attempt });
                 await sleep(waitMs);
                 continue;
             }
 
-            return response;
+            return {
+                statusCode: response.status,
+                body,
+            };
         } catch (error) {
             lastError = error;
             if (useProxy && isProxyFailureMessage(error?.message)) {
@@ -204,8 +261,8 @@ async function requestUrl({
                 continue;
             }
             if (attempt >= MAX_HTTP_ATTEMPTS || !isRetryableError(error)) throw error;
-            const waitMs = 600 * attempt + Math.floor(Math.random() * 400);
-            log.warning(`Retryable request error, retrying in ${waitMs}ms: ${error.message}`, { url: url.toString(), attempt });
+            const waitMs = 800 * attempt + Math.floor(Math.random() * 700);
+            log.debug(`Retryable request error, retrying in ${Math.round(waitMs / 1000)}s: ${error.message}`, { url: url.toString(), attempt });
             await sleep(waitMs);
         }
     }
@@ -221,7 +278,6 @@ async function fetchLocationSuggestions({ query, locale, proxyConfiguration }) {
     const response = await requestUrl({
         url: endpoint,
         proxyConfiguration,
-        accept: JSON_ACCEPT,
         referer: `${KYERO_ORIGIN}/${locale}/`,
     });
 
@@ -284,7 +340,6 @@ async function collectFromSearchUrl({
                 url: dataUrl,
                 proxyConfiguration,
                 referer: baseUrl.toString(),
-                accept: SEARCH_DATA_ACCEPT,
                 remixData: true,
             });
         } catch (error) {
@@ -319,6 +374,7 @@ async function collectFromSearchUrl({
             seenKeys.add(uniqueKey);
             const record = pruneNullish({
                 ...item,
+                images: normalizePropertyImageUrls(item.images),
                 property_url: propertyUrl,
                 search_url: baseUrl.toString(),
                 page,
@@ -368,10 +424,10 @@ await Actor.main(async () => {
 
     let proxyConfiguration;
     if (proxyConfigInput && !shouldDisableProxyLocally(proxyConfigInput)) {
-        proxyConfiguration = await Actor.createProxyConfiguration(proxyConfigInput);
+        proxyConfiguration = await Actor.createProxyConfiguration(normalizeProxyConfig(proxyConfigInput));
     }
     if (!proxyConfiguration && proxyConfigInput?.useApifyProxy) {
-        log.warning('Apify Proxy disabled for this run (missing local credentials).');
+        log.info('Apify Proxy disabled for this local run (missing local credentials).');
     }
 
     const rawInputUrls = normalizeList(urls);

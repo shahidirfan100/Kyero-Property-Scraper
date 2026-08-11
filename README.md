@@ -1,301 +1,277 @@
-# Kyero Property Scraper
+## What does Kyero Property Scraper do?
 
-Extract property listings from Kyero in a clean, structured dataset. Collect prices, locations, bedroom and bathroom counts, floor areas, agency details, property links, feature tags, available image URLs, and image counts for research, monitoring, lead discovery, and property market analysis.
+Kyero Property Scraper collects structured property listings from Kyero.com, a real estate marketplace covering homes and investment properties across European locations. Provide one or more Kyero search URLs, or search by a location keyword, and receive property records with prices, bedrooms, bathrooms, areas, property types, agency details, images, features, and listing URLs.
 
-This Kyero scraper is built for users who need reliable real estate listing data without manually copying results from search pages. Start with Kyero search URLs or use a keyword, choose sale or rental listings, set your result limit, and export the data in the format your workflow needs.
+Use the dataset for property market research, investment screening, agency lead discovery, price comparisons, inventory monitoring, and real estate data pipelines. The results can be downloaded as JSON, CSV, Excel, or XML, connected to integrations, or accessed through the Apify API.
 
-## Features
+## Why use Kyero Property Scraper?
 
-- **Search URL collection** - Collect listings from one or more Kyero search result pages
-- **Keyword discovery** - Use a location keyword when you don't already have a search URL
-- **Sale and rental modes** - Choose `for_sale` or `to_rent` depending on your target market
-- **Image data** - Save available listing image URLs plus the reported `images_count`
-- **Pagination support** - Move through result pages until your limit or page cap is reached
-- **Rich property fields** - Capture price, size, bedroom count, bathroom count, agency details, and features
-- **Clean output** - Empty values are removed so exports stay tidy
-- **Duplicate handling** - Avoid repeated properties across URLs and pages
+- **Collect property inventory** - Gather listings from countries, regions, cities, and resort areas represented on Kyero.
+- **Compare sale and rental markets** - Run separate searches for `for_sale` and `to_rent` listings.
+- **Build research datasets** - Combine prices, property sizes, bedroom counts, features, and locations for market analysis.
+- **Find agency opportunities** - Use listing references, agency information, property URLs, and key property facts for lead qualification.
+- **Track listing changes** - Schedule repeat runs against the same search URLs to review changing inventory and prices.
+- **Control collection size** - Set a maximum result count and page limit for small tests or larger research runs.
+- **Export ready-to-use data** - Download structured results or connect datasets to spreadsheets, webhooks, and automation tools.
 
-## Use Cases
+## What data can you extract from Kyero?
 
-### Property Market Research
+Each saved item represents one property listing. Available fields depend on the information published for that listing.
 
-Track available properties across countries, regions, cities, and resort areas. Use listing counts, prices, bedrooms, property types, and image availability to compare markets and spot patterns in supply.
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | Integer | Kyero property ID. |
+| `name` | String | Listing title. |
+| `price` | Number | Numeric property price. |
+| `price_formatted` | String | Price as displayed on Kyero, including the currency format. |
+| `reference_no` | String | Agency or listing reference number when available. |
+| `payment_scheme` | String | Sale or rental listing indicator. |
+| `location_id` | Integer | Kyero location identifier. |
+| `location_name` | String | Location name associated with the search. |
+| `property_type` | Object | Property type information such as apartment, house, or villa. |
+| `bedroom_count` | Integer | Number of bedrooms. |
+| `bathroom_count` | Integer | Number of bathrooms. |
+| `built_m2` | Number | Built area in square meters. |
+| `plot_m2` | Number | Plot area in square meters. |
+| `short_html_description` | String | Short description supplied with the listing when available. |
+| `agent` | Object | Advertiser or agency details. |
+| `images` | Array | Available listing image URLs. |
+| `images_count` | Integer | Number of images reported for the listing. |
+| `video_url` | String | Listing video URL when available. |
+| `remote_viewing_enabled` | Boolean | Indicates whether remote viewing is offered. |
+| `feature_keys` | Array | Feature labels such as pool, garden, parking, or terrace. |
+| `badges` | Array | Listing badges shown by Kyero. |
+| `primary_badge` | String | Main listing badge when available. |
+| `property_url` | String | Full URL of the Kyero property listing. |
+| `search_url` | String | Search URL used to collect the record. |
+| `page` | Integer | Result page number where the listing was found. |
+| `locale` | String | Kyero locale used for the run. |
+| `search_title` | String | Title of the search results page. |
+| `fetched_at` | String | ISO timestamp when the record was saved. |
 
-### Real Estate Lead Discovery
+## How to use Kyero Property Scraper
 
-Collect property and agency information for outreach, CRM enrichment, or internal lead scoring. The dataset includes agency names, listing URLs, reference numbers, and key property facts that help qualify opportunities.
+1. Open the Actor in Apify Console.
+2. Add a Kyero search URL, or leave `urls` empty and provide a `keyword` or `location`.
+3. Choose `for_sale` or `to_rent` when using keyword discovery.
+4. Set `results_wanted` and `max_pages` for the size of the run.
+5. Start the run and review the dataset preview.
+6. Download the results or connect the dataset to your workflow.
 
-### Pricing Analysis
-
-Build datasets for comparing price bands by location, property type, bedroom count, and usable area. Export results to a spreadsheet or analytics tool to review price movement and inventory changes over time.
-
-### Investment Screening
-
-Create shortlists for target regions and property profiles. Use fields like `price`, `built_m2`, `plot_m2`, `bedroom_count`, `feature_keys`, and `property_url` to feed your own investment checks.
-
-### Listing Monitoring
-
-Run the actor on the same URLs on a schedule to monitor new listings, changed inventory, or changes in available properties. This is useful for recurring research and competitive tracking.
-
----
+For larger or recurring collections, configure Apify Proxy in the input. A smaller first run makes it easier to confirm that the selected location and listing type are correct.
 
 ## Input Parameters
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `urls` | Array | No | `["https://www.kyero.com/en/italy-property-for-sale-0l55732"]` | One or more Kyero search result URLs |
-| `keyword` | String | No | `"italy"` | Location keyword used when `urls` is empty |
-| `location` | String | No | `""` | Optional location phrase used with `keyword` |
-| `listing_type` | String | No | `"for_sale"` | Listing mode: `for_sale` or `to_rent` |
-| `locale` | String | No | `"en"` | Kyero language locale to use for results |
-| `results_wanted` | Integer | No | `20` | Maximum number of property records to save |
-| `max_pages` | Integer | No | `3` | Maximum result pages to collect per search URL |
-| `proxyConfiguration` | Object | No | Apify Residential Proxy preset | Proxy settings for stable larger runs |
+| `urls` | Array of strings | No | Kyero Italy sale search URL | One or more Kyero search result URLs. When valid URLs are provided, they are used directly. |
+| `keyword` | String | No | `italy` | Location keyword used for Kyero location discovery when no valid search URL is provided. |
+| `location` | String | No | Empty | Optional location phrase used with `keyword`. When provided, the first matching location is selected. |
+| `listing_type` | String | No | `for_sale` | Listing mode for keyword discovery: `for_sale` or `to_rent`. |
+| `locale` | String | No | `en` | Two-letter Kyero language locale used for requests and output metadata. |
+| `results_wanted` | Integer | No | `20` | Maximum number of unique property records to save. Minimum value is `1`. |
+| `max_pages` | Integer | No | `3` | Maximum number of result pages to process for each search URL. Minimum value is `1`. |
+| `proxyConfiguration` | Object | No | Apify Proxy preset | Optional Apify Proxy settings for larger or recurring runs. |
 
----
+The `urls` input accepts a list of Kyero search pages, including country, region, city, and other location searches. If no usable URL is supplied, provide at least one of `keyword` or `location`.
 
 ## Output Data
 
-Each dataset item can include:
+The Actor saves one dataset item per unique property. Optional values are omitted when the source listing does not publish them.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | Integer | Kyero property ID |
-| `name` | String | Listing title |
-| `price` | Number | Numeric property price |
-| `price_formatted` | String | Display price shown on Kyero |
-| `reference_no` | String | Listing reference number |
-| `payment_scheme` | String | Sale or rental indicator |
-| `location_id` | Integer | Kyero location ID |
-| `images` | Array | Listing image URLs available in search results |
-| `images_count` | Integer | Number of images reported for the listing |
-| `path` | String | Kyero relative listing path |
-| `property_url` | String | Full property listing URL |
-| `bedroom_count` | Integer | Number of bedrooms |
-| `bathroom_count` | Integer | Number of bathrooms |
-| `built_m2` | Number | Built area in square meters |
-| `plot_m2` | Number | Plot area in square meters |
-| `short_html_description` | String | Short listing description |
-| `property_type` | Object | Property type information |
-| `agent` | Object | Agency or advertiser details |
-| `video_url` | String | Listing video URL when available |
-| `remote_viewing_enabled` | Boolean | Whether remote viewing is offered |
-| `feature_keys` | Array | Property feature labels |
-| `badges` | Array | Listing badges |
-| `primary_badge` | String | Main listing badge |
-| `search_url` | String | Source search URL |
-| `page` | Integer | Result page number |
-| `locale` | String | Locale used during extraction |
-| `location_name` | String | Search location name |
-| `search_title` | String | Search result title |
-| `fetched_at` | String | Timestamp when the record was saved |
-
----
+| `id` | Integer | Kyero property identifier. |
+| `name` | String | Property listing name. |
+| `price` | Number | Numeric price value. |
+| `price_formatted` | String | Human-readable price value. |
+| `payment_scheme` | String | Sale or rent classification. |
+| `bedroom_count` | Integer | Bedroom count. |
+| `bathroom_count` | Integer | Bathroom count. |
+| `built_m2` | Number | Built area in square meters. |
+| `plot_m2` | Number | Plot area in square meters. |
+| `property_type` | Object | Property category details. |
+| `agent` | Object | Agency or advertiser details. |
+| `images` | Array | Image URLs available for the listing. |
+| `feature_keys` | Array | Available property feature labels. |
+| `property_url` | String | Direct Kyero listing URL. |
+| `search_url` | String | Source search page. |
+| `page` | Integer | Source result page. |
+| `locale` | String | Locale used for the run. |
+| `fetched_at` | String | ISO collection timestamp. |
 
 ## Usage Examples
 
 ### Basic URL Extraction
 
-Collect 20 properties from a Kyero search page:
+Collect the first 20 properties from a Kyero search page:
 
 ```json
 {
-    "urls": [
-        "https://www.kyero.com/en/italy-property-for-sale-0l55732"
-    ],
-    "results_wanted": 20
+  "urls": [
+    "https://www.kyero.com/en/italy-property-for-sale-0l55732"
+  ],
+  "results_wanted": 20
 }
 ```
 
 ### Multiple Search URLs
 
-Collect listings from more than one search page:
+Collect unique properties from two search pages and allow up to four pages per URL:
 
 ```json
 {
-    "urls": [
-        "https://www.kyero.com/en/italy-property-for-sale-0l55732",
-        "https://www.kyero.com/en/tuscany-property-for-sale-0l55733"
-    ],
-    "results_wanted": 80,
-    "max_pages": 4
+  "urls": [
+    "https://www.kyero.com/en/italy-property-for-sale-0l55732",
+    "https://www.kyero.com/en/tuscany-property-for-sale-0l55733"
+  ],
+  "results_wanted": 80,
+  "max_pages": 4
 }
 ```
 
-### Keyword Search
+### Keyword-Based Location Discovery
 
-Use a keyword when you don't have a Kyero search URL ready:
+Use a location keyword when you do not already have a Kyero search URL:
 
 ```json
 {
-    "keyword": "italy",
-    "listing_type": "for_sale",
-    "results_wanted": 30,
-    "max_pages": 3
+  "keyword": "italy",
+  "listing_type": "for_sale",
+  "locale": "en",
+  "results_wanted": 30,
+  "max_pages": 3
 }
 ```
 
-### Rental Listings
+### Rental Market Collection
 
-Collect rental listings instead of properties for sale:
+Collect rental listings for a specific location keyword:
 
 ```json
 {
-    "keyword": "spain",
-    "listing_type": "to_rent",
-    "results_wanted": 50,
-    "max_pages": 5
+  "keyword": "spain",
+  "location": "Alicante",
+  "listing_type": "to_rent",
+  "results_wanted": 50,
+  "max_pages": 5,
+  "proxyConfiguration": {
+    "useApifyProxy": true
+  }
 }
 ```
-
----
 
 ## Sample Output
 
+The following example shows one realistic dataset item. Optional fields can differ between listings.
+
 ```json
 {
-    "id": 20757031,
-    "name": "Villa in Monopoli, Bari",
-    "price": 590000,
-    "price_formatted": "€ 590,000",
-    "reference_no": "Rif: 9113RA5201",
-    "payment_scheme": "for_sale",
-    "location_id": 60227,
-    "images": [
-        "https://images.kyero.com/crop/960x720/https://production-kyero-property-images.s3.amazonaws.com/20757/20757031/gvnd7fn6t1_DSC_9464-HDR.jpg",
-        "https://images.kyero.com/crop/960x720/https://production-kyero-property-images.s3.amazonaws.com/20757/20757031/5vnud6dzvr9_DSC_9452-HDR.jpg"
-    ],
-    "images_count": 28,
-    "bedroom_count": 4,
-    "bathroom_count": 2,
-    "built_m2": 153,
-    "plot_m2": 1100,
-    "property_url": "https://www.kyero.com/en/property/20757031-villa-for-sale-monopoli",
-    "property_type": {
-        "id": 10,
-        "key": "villa",
-        "property_group_id": 2
-    },
-    "agent": {
-        "id": 20879,
-        "name": "Pregio Immobiliare",
-        "status": "live"
-    },
-    "feature_keys": [
-        "garage",
-        "parking",
-        "terrace",
-        "garden",
-        "pool"
-    ],
-    "search_url": "https://www.kyero.com/en/italy-property-for-sale-0l55732",
-    "page": 1,
-    "locale": "en",
-    "location_name": "Italy",
-    "fetched_at": "2026-07-18T06:26:10.361Z"
+  "id": 20757031,
+  "name": "Villa in Monopoli, Bari",
+  "price": 590000,
+  "price_formatted": "€ 590,000",
+  "reference_no": "Rif: 9113RA5201",
+  "payment_scheme": "for_sale",
+  "location_id": 60227,
+  "bedroom_count": 4,
+  "bathroom_count": 2,
+  "built_m2": 153,
+  "plot_m2": 1100,
+  "property_type": {
+    "id": 10,
+    "key": "villa",
+    "property_group_id": 2
+  },
+  "agent": {
+    "id": 20879,
+    "name": "Pregio Immobiliare",
+    "status": "live"
+  },
+  "images": [
+    "https://images.kyero.com/crop/960x720/https://production-kyero-property-images.s3.amazonaws.com/20757/20757031/gvnd7fn6t1_DSC_9464-HDR.jpg"
+  ],
+  "images_count": 28,
+  "feature_keys": [
+    "garage",
+    "parking",
+    "terrace",
+    "garden",
+    "pool"
+  ],
+  "property_url": "https://www.kyero.com/en/property/20757031-villa-for-sale-monopoli",
+  "search_url": "https://www.kyero.com/en/italy-property-for-sale-0l55732",
+  "page": 1,
+  "locale": "en",
+  "location_name": "Italy",
+  "fetched_at": "2026-07-18T06:26:10.361Z"
 }
 ```
-
----
 
 ## Tips for Best Results
 
-### Use Specific Search URLs
+- **Use targeted search URLs** - Start with a Kyero country, region, city, or resort-area search page when you need a precise market segment.
+- **Separate sale and rental runs** - Use separate scheduled runs for `for_sale` and `to_rent` so the resulting datasets remain easy to compare.
+- **Test before scaling** - Begin with 20 results and a small page limit, then increase both values after confirming the output.
+- **Keep limits aligned** - A higher `results_wanted` value may require a higher `max_pages` value to reach the desired number of records.
+- **Use stable input locations** - Check that a keyword or URL points to the intended country or region before starting a large collection.
+- **Expect optional fields** - Price, agency, media, descriptions, and features can be missing when they are not published on a particular listing.
+- **Schedule monitoring runs** - Repeat the same search on a daily or weekly schedule to compare available properties over time.
 
-- Use official Kyero search result pages for the most targeted output
-- Keep sale and rental URLs in separate runs for cleaner datasets
-- Confirm the page matches your target country, region, or city before scaling up
+## Integrations and Export Formats
 
-### Start With a Small Run
-
-- Test with `results_wanted: 20` before larger runs
-- Increase `max_pages` after confirming the fields and location are correct
-- Use smaller test runs when checking a new keyword or market
-
-### Tune Pagination
-
-- Use `max_pages` to control how far the actor moves through each search
-- Raise `results_wanted` and `max_pages` together for broader collection
-- Keep limits practical when monitoring multiple search URLs
-
-### Use Proxy for Stability
-
-For larger recurring jobs, use Apify Proxy:
-
-```json
-{
-    "proxyConfiguration": {
-        "useApifyProxy": true
-    }
-}
-```
-
----
-
-## Integrations
-
-Connect your Kyero dataset with:
-
-- **Google Sheets** - Review property data in a spreadsheet
-- **Airtable** - Build searchable real estate databases
-- **Make** - Send listings into automated workflows
-- **Zapier** - Trigger alerts and downstream actions
-- **Webhooks** - Push data to your own systems
-- **CRM tools** - Add agency and property leads to sales pipelines
-
-### Export Formats
-
-- **JSON** - For applications and data pipelines
-- **CSV** - For spreadsheet analysis
-- **Excel** - For reporting and sharing
-- **XML** - For system imports
-
----
+- **Google Sheets** - Review prices, locations, and property attributes in a spreadsheet.
+- **Airtable** - Create a searchable property inventory with views for markets, prices, or agencies.
+- **Make and Zapier** - Send new dataset items into alerts, workflows, or other services.
+- **Webhooks** - Trigger downstream processing after an Actor run finishes.
+- **Apify API** - Fetch run status and dataset records from your own application.
+- **JSON, CSV, Excel, and XML** - Download the results in formats suited to analysis, reporting, or system imports.
 
 ## Frequently Asked Questions
 
-### Can I collect image data for each property?
+### Can I collect both properties for sale and rentals?
 
-Yes. The actor saves the listing image URLs available in the search results and also includes `images_count` so you can see how many images Kyero reports for the property.
+Yes. Use `listing_type: "for_sale"` or `listing_type: "to_rent"` for keyword-based discovery. For direct URLs, use a Kyero search page that matches the listing category you want.
 
-### Can I run the scraper with only a keyword?
+### Can I run the Actor with only a keyword?
 
-Yes. If `urls` is empty, the actor uses the keyword and listing type to find matching Kyero locations.
+Yes. Leave `urls` empty and provide `keyword`, `location`, or both. The Actor finds matching Kyero locations and uses the selected listing type to choose sale or rental results.
 
-### Can I scrape both sale and rental listings in one run?
+### Can I provide multiple Kyero search URLs?
 
-Use separate runs for `for_sale` and `to_rent`. Separate runs keep output easier to filter, compare, and schedule.
+Yes. Add multiple URLs to `urls`. The Actor processes them in one run and removes duplicate properties found across pages.
 
-### Does the actor handle pagination?
+### Does the Actor support pagination?
 
-Yes. The actor moves through result pages until it reaches `results_wanted`, `max_pages`, or the available result limit.
+Yes. `max_pages` controls the maximum number of result pages processed per search URL, while `results_wanted` controls the total number of records saved.
 
-### Why are some fields missing from some records?
+### Why is a field missing from a listing?
 
-Some Kyero listings don't include every optional field. Empty values are removed from the saved output.
+A field is omitted when the Kyero listing does not provide a value for it. Review several records before treating an absent optional field as a collection problem.
 
-### Can I provide multiple Kyero URLs?
+### Can I export Kyero data to CSV or Excel?
 
-Yes. Add multiple search pages to `urls`, and the actor will collect unique properties across them.
+Yes. Apify datasets can be downloaded as CSV, Excel, JSON, XML, and other supported formats, or consumed through integrations and the API.
 
-### What is the best way to monitor a market?
+### Can I schedule recurring Kyero data collection?
 
-Use the same search URLs on a recurring schedule and export each run. This lets you compare inventory, pricing, and new listings over time.
+Yes. Create an Apify schedule for hourly, daily, weekly, or custom recurring runs. Reusing the same search URLs makes inventory and price comparisons easier.
 
----
+### Is collecting Kyero data legal?
+
+You are responsible for complying with Kyero's terms, applicable laws, privacy requirements, and any restrictions that apply to your intended use. Collect and use public property data responsibly.
+
+## Related Actors
+
+- [Housing.com Property Scraper](https://apify.com/shahidirfan/housing-com-property-scraper) - Collect property listings from the Indian real estate market.
+- [Rightmove Property Scraper](https://apify.com/shahidirfan/rightmove-property-scraper) - Extract sale and rental listings from the UK property market.
+- [Propertyfinder Scraper](https://apify.com/shahidirfan/propertyfinder-scraper) - Gather property details, prices, and locations from Propertyfinder.
+- [Savills Property Scraper](https://apify.com/shahidirfan/savills-property-scraper) - Collect real estate listings for market research and property analysis.
 
 ## Support
 
-For issues or feature requests, contact support through the Apify Console.
-
-### Resources
-
-- [Apify Documentation](https://docs.apify.com/)
-- [Apify API Reference](https://docs.apify.com/api/v2)
-- [Scheduling Runs](https://docs.apify.com/platform/schedules)
-
----
+For issues, feature requests, or reports about changed Kyero pages, use the Issues tab on the Actor page or contact the developer through Apify.
 
 ## Legal Notice
 
-This actor is designed for legitimate data collection purposes. Users are responsible for complying with website terms of service, privacy rules, and applicable laws. Use collected data responsibly and respect source website limits.
+This Actor is intended for legitimate collection of publicly available property information. Users are responsible for complying with Kyero's terms of service, applicable laws, privacy rules, and any restrictions on storing, sharing, or contacting agencies using collected data.

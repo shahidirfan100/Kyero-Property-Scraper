@@ -79,7 +79,7 @@
       "description": "Recommended for reliable extraction.",
       "editor": "proxy",
       "default": {
-        "useApifyProxy": true
+        "useApifyProxy": false
       }
     }
   },

@@ -1,27 +1,16 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { Actor, log } from 'apify';
 import { Dataset } from 'crawlee';
-import { Impit } from 'impit';
+import { chromium } from 'patchright';
 
 const KYERO_ORIGIN = 'https://www.kyero.com';
 const ROUTE_ID = 'routes/properties/search/routes/index.route';
 const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524]);
 const MAX_HTTP_ATTEMPTS = 4;
-const impitClients = new Map();
-
-function getImpitClient(proxyUrl) {
-    const key = proxyUrl || '__direct__';
-    if (!impitClients.has(key)) {
-        impitClients.set(
-            key,
-            new Impit({
-                browser: 'chrome',
-                ignoreTlsErrors: true,
-                ...(proxyUrl && { proxyUrl }),
-            }),
-        );
-    }
-    return impitClients.get(key);
-}
+const MAX_SESSION_REFRESHES = 2;
 
 function normalizeList(value) {
     if (!value) return [];
@@ -96,18 +85,17 @@ function isRetryableError(error) {
         'econnreset',
         'etimedout',
         'econnrefused',
+        'ehostunreach',
+        'enetunreach',
+        'enotfound',
         'ecanceled',
         'network',
+        'failed to fetch',
+        'fetch failed',
+        'proxy',
     ].some((word) => message.includes(word));
 }
 
-function isProxyFailureMessage(message) {
-    const text = String(message || '').toLowerCase();
-    return text.includes('proxy.apify.com')
-        || text.includes('407')
-        || text.includes('enotfound')
-        || text.includes('proxy');
-}
 
 function shouldDisableProxyLocally(proxyConfigInput) {
     if (!proxyConfigInput?.useApifyProxy) return false;
@@ -124,6 +112,142 @@ function normalizeProxyConfig(proxyConfigInput) {
         ...proxyConfigInput,
         apifyProxyGroups: ['RESIDENTIAL'],
     };
+}
+
+function getProxyGroups(proxyConfigInput) {
+    const groups = proxyConfigInput?.apifyProxyGroups ?? proxyConfigInput?.groups;
+    return Array.isArray(groups) ? groups : [];
+}
+
+function isCloudflareChallenge(body) {
+    return /checking your browser|just a moment|__cf_chl|cf-chl|challenge-platform|enable javascript and cookies|attention required/i.test(String(body || ''));
+}
+
+
+function getPatchrightProxySettings(proxyUrl) {
+    if (!proxyUrl) return undefined;
+
+    const parsedUrl = new URL(proxyUrl);
+    const proxy = { server: `${parsedUrl.protocol}//${parsedUrl.host}` };
+    if (parsedUrl.username || parsedUrl.password) {
+        proxy.username = decodeURIComponent(parsedUrl.username);
+        proxy.password = decodeURIComponent(parsedUrl.password);
+    }
+    return proxy;
+}
+
+async function closeBrowserSession({ browserContext, userDataDir }) {
+    try {
+        if (browserContext) await browserContext.close();
+    } finally {
+        if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
+    }
+}
+
+async function bootstrapKyeroBrowser({ proxyUrl, bootstrapUrl }) {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'kyero-patchright-'));
+    let browserContext;
+    let keepBrowserOpen = false;
+
+    try {
+        browserContext = await chromium.launchPersistentContext(userDataDir, {
+            channel: 'chrome',
+            headless: false,
+            noViewport: true,
+            ...(proxyUrl && { proxy: getPatchrightProxySettings(proxyUrl) }),
+        });
+        const page = await browserContext.newPage();
+        let navigationResponse;
+        try {
+            navigationResponse = await page.goto(bootstrapUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        } catch (error) {
+            if (proxyUrl && String(error?.message || '').includes('ERR_INVALID_AUTH_CREDENTIALS')) {
+                throw new Error('Browser proxy authentication failed. Check Apify Proxy credentials and access to the selected group; no direct connection was attempted.');
+            }
+            throw error;
+        }
+        const navigationStatus = navigationResponse?.status();
+
+        try {
+            await page.waitForFunction(() => {
+                const challenge = /checking your browser|just a moment|enable javascript and cookies|__cf_chl|cf-chl|challenge-platform|attention required/i;
+                return !challenge.test(`${document.title} ${document.body?.innerText || ''}`);
+            }, null, { timeout: 45000 });
+        } catch {
+            // Inspect the final page below so the failure can be reported without saving its body.
+        }
+
+        const pageState = await page.evaluate(() => ({
+            title: document.title,
+            body: document.body?.innerText?.slice(0, 500) || '',
+            challengeMarkup: /checking your browser|just a moment|__cf_chl|cf-chl|challenge-platform|enable javascript and cookies|attention required/i.test(document.documentElement?.innerHTML || ''),
+        }));
+        const challengeRemains = pageState.challengeMarkup || isCloudflareChallenge(`${pageState.title} ${pageState.body}`);
+        const browserCookies = await browserContext.cookies(KYERO_ORIGIN);
+        const hasClearanceCookie = browserCookies.some((cookie) => cookie.name.toLowerCase() === 'cf_clearance');
+        if (challengeRemains || (navigationStatus >= 400 && !hasClearanceCookie)) {
+            const reason = challengeRemains
+                ? 'Kyero browser challenge remained after the bootstrap wait'
+                : `Kyero browser bootstrap returned HTTP ${navigationStatus} without a clearance cookie`;
+            throw new Error(`${reason}; API requests were not started.`);
+        }
+
+        log.info('Patchright browser session is ready for Kyero API requests.');
+        keepBrowserOpen = true;
+        return { browserContext, browserPage: page, userDataDir };
+    } finally {
+        if (!keepBrowserOpen) await closeBrowserSession({ browserContext, userDataDir });
+    }
+}
+
+async function createKyeroBrowserSession({
+    proxyConfiguration,
+    proxyConfigInput,
+    bootstrapUrl,
+}) {
+    const proxyGroups = getProxyGroups(normalizeProxyConfig(proxyConfigInput));
+    const usesUnblocker = proxyGroups.some((group) => String(group).toUpperCase() === 'UNBLOCKER');
+    if (proxyConfiguration && usesUnblocker) {
+        throw new Error('Kyero browser requests need a stable proxy identity. Select Residential instead of UNBLOCKER.');
+    }
+
+    const usesApifyProxy = Boolean(proxyConfigInput?.useApifyProxy) || proxyGroups.length > 0;
+    const sessionId = proxyConfiguration && usesApifyProxy
+        ? `kyero_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+        : undefined;
+    let proxyUrl;
+    if (proxyConfiguration) {
+        proxyUrl = sessionId
+            ? await proxyConfiguration.newUrl(sessionId)
+            : await proxyConfiguration.newUrl();
+    }
+
+    if (proxyUrl && proxyGroups.includes('RESIDENTIAL')) {
+        log.info('Using one Apify Residential session for Patchright bootstrap and API requests.');
+    } else if (proxyUrl) {
+        log.info('Reusing the configured proxy URL for Patchright bootstrap and API requests.');
+    }
+
+    const browserSession = await bootstrapKyeroBrowser({ proxyUrl, bootstrapUrl });
+    return {
+        proxyConfiguration,
+        proxyConfigInput,
+        bootstrapUrl,
+        proxyUrl,
+        ...browserSession,
+        refreshCount: 0,
+    };
+}
+
+async function refreshKyeroBrowserSession(session) {
+    const refreshCount = session.refreshCount + 1;
+    const refreshedSession = await createKyeroBrowserSession(session);
+    const previousBrowserSession = {
+        browserContext: session.browserContext,
+        userDataDir: session.userDataDir,
+    };
+    Object.assign(session, refreshedSession, { refreshCount });
+    await closeBrowserSession(previousBrowserSession);
 }
 
 function prepareSearchUrl(inputUrl, locale) {
@@ -214,81 +338,129 @@ function normalizePropertyImageUrls(images) {
     }))];
 }
 
+async function fetchKyeroFromPatchright({ url, session, referer, remixData }) {
+    const targetUrl = url.toString();
+    const targetOrigin = new URL(targetUrl).origin;
+    const pageOrigin = new URL(session.browserPage.url()).origin;
+    if (targetOrigin !== pageOrigin) {
+        throw new Error(`Patchright session cannot fetch cross-origin URL: ${targetOrigin}`);
+    }
+
+    const headers = {
+        'x-requested-with': 'XMLHttpRequest',
+        ...(remixData ? { 'x-remix-data': 'yes' } : {}),
+    };
+    const response = await session.browserPage.evaluate(async ({ targetUrl: fetchUrl, requestHeaders, requestReferer, timeoutMs }) => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            const result = await fetch(fetchUrl, {
+                method: 'GET',
+                credentials: 'include',
+                headers: requestHeaders,
+                signal: controller.signal,
+                ...(requestReferer ? { referrer: requestReferer } : {}),
+            });
+            const body = await result.text();
+            const cloudflareChallenge = /checking your browser|just a moment|__cf_chl|cf-chl|challenge-platform|enable javascript and cookies|attention required/i.test(body);
+            return {
+                statusCode: result.status,
+                contentType: result.headers.get('content-type') || '',
+                body,
+                retryAfter: result.headers.get('retry-after'),
+                isCloudflareChallenge: cloudflareChallenge,
+            };
+        } catch (error) {
+            if (controller.signal.aborted) throw new Error(`Kyero API request timed out after ${timeoutMs}ms.`);
+            throw error;
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    }, { targetUrl, requestHeaders: headers, requestReferer: referer, timeoutMs: 30000 });
+
+    return response;
+}
+
 async function requestUrl({
     url,
-    proxyConfiguration,
+    session,
     referer,
     remixData = false,
 }) {
     let lastError;
-    let useProxy = Boolean(proxyConfiguration);
 
     for (let attempt = 1; attempt <= MAX_HTTP_ATTEMPTS; attempt++) {
-        const proxyUrl = useProxy ? await proxyConfiguration.newUrl() : undefined;
         try {
-            const client = getImpitClient(proxyUrl);
-            const response = await client.fetch(url.toString(), {
-                headers: {
-                    'x-requested-with': 'XMLHttpRequest',
-                    ...(remixData ? { 'x-remix-data': 'yes' } : {}),
-                    ...(referer ? { referer } : {}),
-                },
-            });
-            const body = await response.text();
-
-            if (response.status === 407 && useProxy) {
-                useProxy = false;
-                log.warning('Proxy authentication failed (407). Retrying without proxy.', { url: url.toString() });
-                continue;
+            const response = await fetchKyeroFromPatchright({ url, session, referer, remixData });
+            if (
+                response.statusCode === 403
+                || response.isCloudflareChallenge
+                || !RETRYABLE_STATUS_CODES.has(response.statusCode)
+                || attempt >= MAX_HTTP_ATTEMPTS
+            ) {
+                return response;
             }
 
-            if (RETRYABLE_STATUS_CODES.has(response.status) && attempt < MAX_HTTP_ATTEMPTS) {
-                const waitMs = getRetryDelayMs(response.status, attempt, response.headers);
-                log.debug(`Retryable status ${response.status}, retrying in ${Math.round(waitMs / 1000)}s`, { url: url.toString(), attempt });
-                await sleep(waitMs);
-                continue;
-            }
+            const retryHeaders = { get: (name) => name.toLowerCase() === 'retry-after' ? response.retryAfter : undefined };
+            const waitMs = getRetryDelayMs(response.statusCode, attempt, retryHeaders);
+            log.warning(`Kyero returned temporary HTTP ${response.statusCode}; retrying in ${Math.round(waitMs / 1000)}s.`, { attempt });
+            await sleep(waitMs);
 
-            return {
-                statusCode: response.status,
-                body,
-            };
+            const needsNewSession = [502, 520, 521, 522, 524].includes(response.statusCode);
+            if (needsNewSession && session.refreshCount < MAX_SESSION_REFRESHES) {
+                await refreshKyeroBrowserSession(session);
+            }
         } catch (error) {
             lastError = error;
-            if (useProxy && isProxyFailureMessage(error?.message)) {
-                useProxy = false;
-                log.warning(`Proxy failed, retrying without proxy: ${error.message}`, { url: url.toString(), attempt });
-                continue;
-            }
             if (attempt >= MAX_HTTP_ATTEMPTS || !isRetryableError(error)) throw error;
+
             const waitMs = 800 * attempt + Math.floor(Math.random() * 700);
-            log.debug(`Retryable request error, retrying in ${Math.round(waitMs / 1000)}s: ${error.message}`, { url: url.toString(), attempt });
+            log.warning(`Temporary Kyero browser/network error; retrying in ${Math.round(waitMs / 1000)}s.`, { attempt });
             await sleep(waitMs);
+            if (session.refreshCount < MAX_SESSION_REFRESHES) {
+                await refreshKyeroBrowserSession(session);
+            }
         }
     }
 
     throw lastError ?? new Error(`Request failed for ${url.toString()}`);
 }
 
-async function fetchLocationSuggestions({ query, locale, proxyConfiguration }) {
+async function fetchLocationSuggestions({ query, locale, session }) {
     const endpoint = new URL('/kyero-api/location-suggestions', KYERO_ORIGIN);
     endpoint.searchParams.set('locale', locale);
     endpoint.searchParams.set('q', query);
 
     const response = await requestUrl({
         url: endpoint,
-        proxyConfiguration,
+        session,
         referer: `${KYERO_ORIGIN}/${locale}/`,
     });
+
+    if (response.statusCode === 403 || response.isCloudflareChallenge) {
+        const reason = response.isCloudflareChallenge ? 'Cloudflare browser challenge' : 'access denied';
+        const message = `Kyero returned HTTP ${response.statusCode} from Patchright (${reason}) for location suggestions.`;
+        log.warning(message, { query, locale });
+        throw new Error(message);
+    }
 
     if (response.statusCode !== 200) {
         log.warning(`Location suggestions failed with status ${response.statusCode}`, { query, locale });
         return [];
     }
+    if (!response.contentType.toLowerCase().includes('json')) {
+        log.warning('Location suggestions returned a non-JSON response.', { query, locale });
+        return [];
+    }
 
     try {
         const data = JSON.parse(response.body);
-        return Array.isArray(data?.results) ? data.results : [];
+        if (!Array.isArray(data?.results)) {
+            log.warning('Location suggestions response did not contain a results array.', { query, locale });
+            return [];
+        }
+        return data.results;
     } catch (error) {
         log.warning(`Failed to parse location suggestions JSON: ${error.message}`, { query, locale });
         return [];
@@ -322,7 +494,7 @@ async function collectFromSearchUrl({
     locale,
     resultsWanted,
     maxPages,
-    proxyConfiguration,
+    session,
     seenKeys,
     savedCount,
 }) {
@@ -338,7 +510,7 @@ async function collectFromSearchUrl({
         try {
             response = await requestUrl({
                 url: dataUrl,
-                proxyConfiguration,
+                session,
                 referer: baseUrl.toString(),
                 remixData: true,
             });
@@ -347,8 +519,19 @@ async function collectFromSearchUrl({
             break;
         }
 
+        if (response.statusCode === 403 || response.isCloudflareChallenge) {
+            const reason = response.isCloudflareChallenge ? 'Cloudflare challenge' : 'access denied';
+            const error = new Error(`Kyero returned HTTP ${response.statusCode} from Patchright (${reason}) for the search endpoint.`);
+            error.code = 'KYERO_ACCESS_DENIED';
+            throw error;
+        }
         if (response.statusCode !== 200) {
-            log.warning(`Search request failed (${response.statusCode})`, { dataUrl: dataUrl.toString() });
+            log.warning(`Search request failed (HTTP ${response.statusCode}).`, { dataUrl: dataUrl.toString() });
+            break;
+        }
+        const contentType = response.contentType.toLowerCase();
+        if (!contentType.includes('x-script') && !contentType.includes('json')) {
+            log.warning('Search request returned an unexpected content type.', { dataUrl: dataUrl.toString() });
             break;
         }
 
@@ -439,59 +622,83 @@ await Actor.main(async () => {
             log.warning(`Skipping invalid URL "${inputUrl}": ${error.message}`);
         }
     }
+    if (rawInputUrls.length && !searchUrls.length) {
+        throw new Error('No valid search URLs were provided in "urls".');
+    }
 
-    if (!searchUrls.length) {
-        const queryCandidates = [];
+    const queryCandidates = [];
+    if (!rawInputUrls.length) {
         if (trimmedLocation) queryCandidates.push(trimmedLocation);
         if (trimmedKeyword) queryCandidates.push(trimmedKeyword);
         if (trimmedKeyword && trimmedLocation) queryCandidates.push(`${trimmedKeyword} ${trimmedLocation}`);
+    }
+    const uniqueCandidates = [...new Set(queryCandidates.map((query) => query.trim()).filter(Boolean))];
+    if (!rawInputUrls.length && !uniqueCandidates.length) {
+        throw new Error('Provide either "urls" or at least one of "keyword"/"location".');
+    }
 
-        const uniqueCandidates = [...new Set(queryCandidates.map((q) => q.trim()).filter(Boolean))];
-        if (!uniqueCandidates.length) throw new Error('Provide either "urls" or at least one of "keyword"/"location".');
+    let bootstrapUrl = searchUrls[0]?.toString();
+    if (!bootstrapUrl) {
+        const suggestionsUrl = new URL('/kyero-api/location-suggestions', KYERO_ORIGIN);
+        suggestionsUrl.searchParams.set('locale', locale);
+        suggestionsUrl.searchParams.set('q', uniqueCandidates[0]);
+        bootstrapUrl = suggestionsUrl.toString();
+    }
+    const session = await createKyeroBrowserSession({
+        proxyConfiguration,
+        proxyConfigInput,
+        bootstrapUrl,
+    });
 
-        let suggestions = [];
-        let matchedQuery = '';
-        for (const query of uniqueCandidates) {
-            suggestions = await fetchLocationSuggestions({ query, locale, proxyConfiguration });
-            if (suggestions.length) {
-                matchedQuery = query;
-                break;
+    try {
+        if (!rawInputUrls.length) {
+            let suggestions = [];
+            let matchedQuery = '';
+            for (const query of uniqueCandidates) {
+                suggestions = await fetchLocationSuggestions({ query, locale, session });
+                if (suggestions.length) {
+                    matchedQuery = query;
+                    break;
+                }
+            }
+            if (!suggestions.length) throw new Error(`No locations found for query candidates: ${uniqueCandidates.join(', ')}.`);
+            log.info(`Keyword discovery matched "${matchedQuery}" with ${suggestions.length} suggestion(s).`);
+
+            const pathKey = listingType === 'to_rent' ? 'to_rent_path' : 'for_sale_path';
+            const selectedSuggestions = trimmedLocation ? suggestions.slice(0, 1) : suggestions;
+            searchUrls = selectedSuggestions
+                .map((suggestion) => suggestion[pathKey])
+                .filter((path) => typeof path === 'string' && path.trim())
+                .map((path) => prepareSearchUrl(buildAbsoluteUrl(path), locale));
+            if (!searchUrls.length) throw new Error(`No valid "${pathKey}" paths found for query discovery.`);
+        }
+
+        const uniqueUrls = [...new Map(searchUrls.map((url) => [url.toString(), url])).values()];
+        const seenKeys = new Set();
+        let savedCount = 0;
+
+        log.info(`Starting Kyero API crawl for ${uniqueUrls.length} URL(s).`);
+
+        for (const searchUrl of uniqueUrls) {
+            if (savedCount >= resultsWanted) break;
+            try {
+                savedCount = await collectFromSearchUrl({
+                    searchUrl,
+                    locale,
+                    resultsWanted,
+                    maxPages,
+                    session,
+                    seenKeys,
+                    savedCount,
+                });
+            } catch (error) {
+                if (error.code === 'KYERO_ACCESS_DENIED') throw error;
+                log.warning(`Skipping failed search URL: ${error.message}`, { searchUrl: searchUrl.toString() });
             }
         }
-        if (!suggestions.length) throw new Error(`No locations found for query candidates: ${uniqueCandidates.join(', ')}.`);
-        log.info(`Keyword discovery matched "${matchedQuery}" with ${suggestions.length} suggestion(s).`);
 
-        const pathKey = listingType === 'to_rent' ? 'to_rent_path' : 'for_sale_path';
-        const selectedSuggestions = trimmedLocation ? suggestions.slice(0, 1) : suggestions;
-        searchUrls = selectedSuggestions
-            .map((suggestion) => suggestion[pathKey])
-            .filter((path) => typeof path === 'string' && path.trim())
-            .map((path) => prepareSearchUrl(buildAbsoluteUrl(path), locale));
-        if (!searchUrls.length) throw new Error(`No valid "${pathKey}" paths found for query discovery.`);
+        log.info(`Finished. Saved ${savedCount} properties.`);
+    } finally {
+        await closeBrowserSession(session);
     }
-
-    const uniqueUrls = [...new Map(searchUrls.map((url) => [url.toString(), url])).values()];
-    const seenKeys = new Set();
-    let savedCount = 0;
-
-    log.info(`Starting Kyero API crawl for ${uniqueUrls.length} URL(s).`);
-
-    for (const searchUrl of uniqueUrls) {
-        if (savedCount >= resultsWanted) break;
-        try {
-            savedCount = await collectFromSearchUrl({
-                searchUrl,
-                locale,
-                resultsWanted,
-                maxPages,
-                proxyConfiguration,
-                seenKeys,
-                savedCount,
-            });
-        } catch (error) {
-            log.warning(`Skipping failed search URL: ${error.message}`, { searchUrl: searchUrl.toString() });
-        }
-    }
-
-    log.info(`Finished. Saved ${savedCount} properties.`);
 });

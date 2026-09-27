@@ -11,6 +11,7 @@ const ROUTE_ID = 'routes/properties/search/routes/index.route';
 const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524]);
 const MAX_HTTP_ATTEMPTS = 4;
 const MAX_SESSION_REFRESHES = 2;
+const CLOUDFLARE_CHALLENGE_PATTERN = 'checking your browser|just a moment|__cf_chl|cf-chl|challenge-platform|enable javascript and cookies|attention required';
 
 function normalizeList(value) {
     if (!value) return [];
@@ -120,7 +121,7 @@ function getProxyGroups(proxyConfigInput) {
 }
 
 function isCloudflareChallenge(body) {
-    return /checking your browser|just a moment|__cf_chl|cf-chl|challenge-platform|enable javascript and cookies|attention required/i.test(String(body || ''));
+    return new RegExp(CLOUDFLARE_CHALLENGE_PATTERN, 'i').test(String(body || ''));
 }
 
 
@@ -169,27 +170,32 @@ async function bootstrapKyeroBrowser({ proxyUrl, bootstrapUrl }) {
         const navigationStatus = navigationResponse?.status();
 
         try {
-            await page.waitForFunction(() => {
-                const challenge = /checking your browser|just a moment|enable javascript and cookies|__cf_chl|cf-chl|challenge-platform|attention required/i;
+            await page.waitForFunction((challengePattern) => {
+                const challenge = new RegExp(challengePattern, 'i');
                 return !challenge.test(`${document.title} ${document.body?.innerText || ''}`);
-            }, null, { timeout: 45000 });
+            }, CLOUDFLARE_CHALLENGE_PATTERN, { timeout: 45000 });
         } catch {
             // Inspect the final page below so the failure can be reported without saving its body.
         }
 
-        const pageState = await page.evaluate(() => ({
-            title: document.title,
-            body: document.body?.innerText?.slice(0, 500) || '',
-            challengeMarkup: /checking your browser|just a moment|__cf_chl|cf-chl|challenge-platform|enable javascript and cookies|attention required/i.test(document.documentElement?.innerHTML || ''),
-        }));
-        const challengeRemains = pageState.challengeMarkup || isCloudflareChallenge(`${pageState.title} ${pageState.body}`);
+        const pageState = await page.evaluate((challengePattern) => {
+            const title = document.title || '';
+            const body = document.body?.innerText || '';
+            return {
+                challengeVisible: new RegExp(challengePattern, 'i').test(`${title} ${body}`),
+            };
+        }, CLOUDFLARE_CHALLENGE_PATTERN);
+        const challengeRemains = pageState.challengeVisible;
         const browserCookies = await browserContext.cookies(KYERO_ORIGIN);
         const hasClearanceCookie = browserCookies.some((cookie) => cookie.name.toLowerCase() === 'cf_clearance');
         if (challengeRemains || (navigationStatus >= 400 && !hasClearanceCookie)) {
             const reason = challengeRemains
                 ? 'Kyero browser challenge remained after the bootstrap wait'
                 : `Kyero browser bootstrap returned HTTP ${navigationStatus} without a clearance cookie`;
-            throw new Error(`${reason}; API requests were not started.`);
+            const status = navigationStatus ?? 'unknown';
+            const clearance = hasClearanceCookie ? 'present' : 'missing';
+            const proxy = proxyUrl ? 'configured' : 'not configured';
+            throw new Error(`${reason} (navigation HTTP ${status}; clearance cookie ${clearance}; proxy ${proxy}); API requests were not started. A Residential proxy may be needed if Kyero continues to challenge this network.`);
         }
 
         log.info('Patchright browser session is ready for Kyero API requests.');

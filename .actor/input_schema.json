@@ -9,9 +9,6 @@
       "type": "array",
       "description": "One or more Kyero search result URLs.",
       "editor": "stringList",
-      "prefill": [
-        "https://www.kyero.com/en/italy-property-for-sale-0l55732"
-      ],
       "items": {
         "type": "string"
       }
@@ -28,8 +25,7 @@
       "title": "Location",
       "type": "string",
       "description": "Optional extra location phrase used together with keyword.",
-      "editor": "textfield",
-      "prefill": ""
+      "editor": "textfield"
     },
     "listing_type": {
       "title": "Listing type",
@@ -37,7 +33,6 @@
       "description": "Choose property sales or long-term rentals.",
       "editor": "select",
       "default": "for_sale",
-      "prefill": "for_sale",
       "enum": [
         "for_sale",
         "to_rent"
@@ -52,8 +47,7 @@
       "type": "string",
       "description": "Language locale used for Kyero requests.",
       "editor": "textfield",
-      "default": "en",
-      "prefill": "en"
+      "default": "en"
     },
     "results_wanted": {
       "title": "Results wanted",
@@ -61,7 +55,6 @@
       "description": "Maximum number of listings to store.",
       "minimum": 1,
       "default": 20,
-      "prefill": 20,
       "editor": "number"
     },
     "max_pages": {
@@ -70,16 +63,16 @@
       "description": "Maximum pages to fetch per search URL.",
       "minimum": 1,
       "default": 3,
-      "prefill": 3,
       "editor": "number"
     },
     "proxyConfiguration": {
       "title": "Proxy configuration",
       "type": "object",
-      "description": "Recommended for reliable extraction.",
+      "description": "Apify Residential Proxy is enabled by default because Kyero may block direct cloud connections. Proxy usage incurs charges and access is not guaranteed. Explicit settings are respected.",
       "editor": "proxy",
       "default": {
-        "useApifyProxy": false
+        "useApifyProxy": true,
+        "apifyProxyGroups": ["RESIDENTIAL"]
       }
     }
   },

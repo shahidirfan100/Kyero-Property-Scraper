@@ -142,6 +142,24 @@ The listing endpoint, packed-response decoder, property mapping, deduplication, 
 
 This change removes the extra Impit request that previously received 403 before the same request was retried in Patchright. It does not guarantee Kyero will clear the challenge on every run. Local Patchright-only smoke tests succeeded for both a direct search URL and the `italy` keyword path, saving one property in each run. Apify Residential behavior remains unverified.
 
+## QA failure diagnosis and proxy default correction (2026-09-30)
+
+The supplied 2026-09-29 cloud log failed during `bootstrapKyeroBrowser`, before location lookup or listing requests: navigation HTTP 403, challenge still visible after 45 seconds, `cf_clearance` missing, and proxy not configured. Zero records were expected because extraction had not started. This is an access failure, not evidence of a broken decoder, listing mapper, pagination, or missing search input.
+
+The reviewed schema explicitly defaulted `proxyConfiguration.useApifyProxy` to false. Earlier local successes did not establish cloud access, and previous Residential authentication corrections did not prove a successful Residential scrape. The runtime also silently disabled enabled Apify Proxy on local runs without credentials, making those tests unrepresentative of the configured production transport.
+
+Scope of this correction:
+
+- Keep exactly one prefill on `keyword`, paired with the existing `italy` default; preserve result, page, locale, and listing-type defaults.
+- Document and use Apify Residential Proxy as the default when proxy input is omitted, including SDK runs without platform-injected defaults. Preserve explicit supplied settings, including disabled proxy, custom URLs, and selected groups. Existing saved inputs with `useApifyProxy: false` must be updated explicitly.
+- Fail clearly when local Apify Proxy credentials are missing rather than silently using a direct connection.
+- Create the effective local key-value-store input with one keyword search and a one-record/one-page limit. Root `INPUT.json` alone does not configure `Actor.getInput()`.
+- Preserve browser setup, endpoints, extraction, pagination, and failure status. Do not fabricate records or convert blocking into successful empty output.
+
+Acceptance checks: valid configuration JSON, lint without errors, regression tests for the schema/proxy default and explicit overrides, a local credentials guard check, and a cloud run using Residential that succeeds with a non-empty dataset within five minutes. Residential traffic incurs charges and does not guarantee access.
+
+Local validation: all five regression tests and JSON/syntax checks passed. The configured local startup correctly failed with missing Apify credentials and exit code 91. No Apify token or proxy password was available, so a live Residential scrape and Store health-test pass remain unverified. `npm ci` encountered an existing lockfile inconsistency involving `@emnapi` packages; dependencies were installed for local validation with `npm install --package-lock=false --no-audit --no-fund` without modifying the lockfile.
+
 ### Apify Residential proxy authentication follow-up (2026-09-25)
 
 A cloud run failed during browser bootstrap with Chromium `net::ERR_INVALID_AUTH_CREDENTIALS`, before any Kyero API request was made. The actor had passed Apify's full credential-bearing proxy URL as Patchright's `proxy.server` value. The browser configuration now separates the proxy address from its decoded username and password, while keeping the same Residential session bound to the browser context. Credentials are not logged, and the actor does not fall back to a direct connection. This code-level correction still requires a cloud run to verify against Apify Residential; it does not establish that Kyero will clear its challenge.

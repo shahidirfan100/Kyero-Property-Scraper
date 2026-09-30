@@ -58,22 +58,22 @@ Each saved item represents one property listing. Available fields depend on the 
 5. Start the run and review the dataset preview.
 6. Download the results or connect the dataset to your workflow.
 
-For larger or recurring collections, configure Apify Proxy in the input. A smaller first run makes it easier to confirm that the selected location and listing type are correct.
+Apify Residential Proxy is enabled by default because Kyero can block direct connections from cloud networks. Residential traffic incurs proxy usage charges, and access is not guaranteed. You can explicitly disable the proxy or supply your own settings; the Actor respects that choice. A smaller first run makes it easier to confirm that the selected location and listing type are correct.
 
 ## Input Parameters
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `urls` | Array of strings | No | Kyero Italy sale search URL | One or more Kyero search result URLs. When valid URLs are provided, they are used directly. |
+| `urls` | Array of strings | No | Empty | One or more Kyero search result URLs. When valid URLs are provided, they are used directly. |
 | `keyword` | String | No | `italy` | Location keyword used for Kyero location discovery when no valid search URL is provided. |
 | `location` | String | No | Empty | Optional location phrase used with `keyword`. When provided, the first matching location is selected. |
 | `listing_type` | String | No | `for_sale` | Listing mode for keyword discovery: `for_sale` or `to_rent`. |
 | `locale` | String | No | `en` | Two-letter Kyero language locale used for requests and output metadata. |
 | `results_wanted` | Integer | No | `20` | Maximum number of unique property records to save. Minimum value is `1`. |
 | `max_pages` | Integer | No | `3` | Maximum number of result pages to process for each search URL. Minimum value is `1`. |
-| `proxyConfiguration` | Object | No | Apify Proxy preset | Optional Apify Proxy settings for larger or recurring runs. |
+| `proxyConfiguration` | Object | No | Apify Residential Proxy enabled | Used when proxy settings are omitted. Residential traffic incurs charges. Explicit proxy settings, including disabling the proxy, are respected. |
 
-The `urls` input accepts a list of Kyero search pages, including country, region, city, and other location searches. If no usable URL is supplied, provide at least one of `keyword` or `location`.
+The `urls` input accepts a list of Kyero search pages, including country, region, city, and other location searches. URL mode takes precedence over keyword and location values. With no search input, the cloud default is `keyword: "italy"`. When providing a location-only search, clear `keyword` to avoid combining it with the default keyword.
 
 ## Output Data
 
@@ -228,6 +228,10 @@ The following example shows one realistic dataset item. Optional fields can diff
 - **JSON, CSV, Excel, and XML** - Download the results in formats suited to analysis, reporting, or system imports.
 
 ## Frequently Asked Questions
+
+### Why does a run fail with HTTP 403 and zero properties?
+
+Kyero denied access before it returned property records. A smaller result limit or a different keyword does not fix this access problem. Check the log for whether a proxy was configured. Older saved inputs or tasks may contain `"proxyConfiguration": {"useApifyProxy": false}`; explicit settings remain unchanged even after the default is updated. Enable Apify Residential Proxy in those inputs and test a small run. If Kyero still denies access, report the run through the Issues tab. Residential Proxy does not guarantee access, and a blocked run is not treated as a successful empty collection.
 
 ### Can I collect both properties for sale and rentals?
 

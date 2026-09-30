@@ -6,6 +6,8 @@ import { Actor, log } from 'apify';
 import { Dataset } from 'crawlee';
 import { chromium } from 'patchright';
 
+import { assertLocalProxyCredentials, resolveProxyConfig } from './proxy.js';
+
 const KYERO_ORIGIN = 'https://www.kyero.com';
 const ROUTE_ID = 'routes/properties/search/routes/index.route';
 const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524]);
@@ -98,11 +100,6 @@ function isRetryableError(error) {
 }
 
 
-function shouldDisableProxyLocally(proxyConfigInput) {
-    if (!proxyConfigInput?.useApifyProxy) return false;
-    if (process.env.APIFY_IS_AT_HOME === '1') return false;
-    return !process.env.APIFY_PROXY_PASSWORD && !process.env.APIFY_TOKEN;
-}
 
 function normalizeProxyConfig(proxyConfigInput) {
     if (!proxyConfigInput?.useApifyProxy) return proxyConfigInput;
@@ -120,9 +117,6 @@ function getProxyGroups(proxyConfigInput) {
     return Array.isArray(groups) ? groups : [];
 }
 
-function isCloudflareChallenge(body) {
-    return new RegExp(CLOUDFLARE_CHALLENGE_PATTERN, 'i').test(String(body || ''));
-}
 
 
 function getPatchrightProxySettings(proxyUrl) {
@@ -601,8 +595,9 @@ await Actor.main(async () => {
         locale: inputLocale = 'en',
         results_wanted: resultsWantedInput = 20,
         max_pages: maxPagesInput = 3,
-        proxyConfiguration: proxyConfigInput,
+        proxyConfiguration: suppliedProxyConfig,
     } = input;
+    const proxyConfigInput = resolveProxyConfig(suppliedProxyConfig);
 
     const locale = normalizeLocale(inputLocale);
     const listingType = normalizeListingType(listingTypeInput);
@@ -611,13 +606,11 @@ await Actor.main(async () => {
     const trimmedKeyword = typeof keyword === 'string' ? keyword.trim() : '';
     const trimmedLocation = typeof location === 'string' ? location.trim() : '';
 
-    let proxyConfiguration;
-    if (proxyConfigInput && !shouldDisableProxyLocally(proxyConfigInput)) {
-        proxyConfiguration = await Actor.createProxyConfiguration(normalizeProxyConfig(proxyConfigInput));
-    }
-    if (!proxyConfiguration && proxyConfigInput?.useApifyProxy) {
-        log.info('Apify Proxy disabled for this local run (missing local credentials).');
-    }
+    assertLocalProxyCredentials(proxyConfigInput);
+    const proxyConfiguration = proxyConfigInput
+        ? await Actor.createProxyConfiguration(normalizeProxyConfig(proxyConfigInput))
+        : undefined;
+    log.info(`Starting Kyero run | results=${resultsWanted} | max_pages=${maxPages} | proxy=${proxyConfiguration ? 'configured' : 'disabled'}`);
 
     const rawInputUrls = normalizeList(urls);
     let searchUrls = [];

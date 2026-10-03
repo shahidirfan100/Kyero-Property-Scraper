@@ -12,8 +12,10 @@ const KYERO_ORIGIN = 'https://www.kyero.com';
 const ROUTE_ID = 'routes/properties/search/routes/index.route';
 const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524]);
 const MAX_HTTP_ATTEMPTS = 4;
-const MAX_SESSION_REFRESHES = 2;
-const CLOUDFLARE_CHALLENGE_PATTERN = 'checking your browser|just a moment|__cf_chl|cf-chl|challenge-platform|enable javascript and cookies|attention required';
+const MAX_SESSION_REFRESHES = 3;
+const MAX_BOOTSTRAP_ATTEMPTS = 3;
+const BOOTSTRAP_CHALLENGE_TIMEOUT_MS = 30000;
+const CLOUDFLARE_CHALLENGE_PATTERN = 'checking your browser|just a moment|__cf_chl|cf-chl|challenge-platform|enable javascript and cookies|attention required|access blocked';
 
 function normalizeList(value) {
     if (!value) return [];
@@ -148,7 +150,8 @@ async function bootstrapKyeroBrowser({ proxyUrl, bootstrapUrl }) {
         browserContext = await chromium.launchPersistentContext(userDataDir, {
             channel: 'chrome',
             headless: false,
-            noViewport: true,
+            viewport: null,
+            ignoreDefaultArgs: ['--enable-automation'],
             ...(proxyUrl && { proxy: getPatchrightProxySettings(proxyUrl) }),
         });
         const page = await browserContext.newPage();
@@ -167,7 +170,7 @@ async function bootstrapKyeroBrowser({ proxyUrl, bootstrapUrl }) {
             await page.waitForFunction((challengePattern) => {
                 const challenge = new RegExp(challengePattern, 'i');
                 return !challenge.test(`${document.title} ${document.body?.innerText || ''}`);
-            }, CLOUDFLARE_CHALLENGE_PATTERN, { timeout: 45000 });
+            }, CLOUDFLARE_CHALLENGE_PATTERN, { timeout: BOOTSTRAP_CHALLENGE_TIMEOUT_MS });
         } catch {
             // Inspect the final page below so the failure can be reported without saving its body.
         }
@@ -212,31 +215,44 @@ async function createKyeroBrowserSession({
     }
 
     const usesApifyProxy = Boolean(proxyConfigInput?.useApifyProxy) || proxyGroups.length > 0;
-    const sessionId = proxyConfiguration && usesApifyProxy
-        ? `kyero_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
-        : undefined;
-    let proxyUrl;
-    if (proxyConfiguration) {
-        proxyUrl = sessionId
-            ? await proxyConfiguration.newUrl(sessionId)
-            : await proxyConfiguration.newUrl();
+
+    let lastError;
+    for (let attempt = 1; attempt <= MAX_BOOTSTRAP_ATTEMPTS; attempt++) {
+        const sessionId = proxyConfiguration && usesApifyProxy
+            ? `kyero_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+            : undefined;
+        let proxyUrl;
+        if (proxyConfiguration) {
+            proxyUrl = sessionId
+                ? await proxyConfiguration.newUrl(sessionId)
+                : await proxyConfiguration.newUrl();
+        }
+
+        if (proxyUrl && proxyGroups.includes('RESIDENTIAL')) {
+            log.info(`Bootstrapping Kyero via Apify Residential session (attempt ${attempt}/${MAX_BOOTSTRAP_ATTEMPTS}); the same session is reused for the API requests.`);
+        } else if (proxyUrl) {
+            log.info(`Bootstrapping Kyero with the configured proxy (attempt ${attempt}/${MAX_BOOTSTRAP_ATTEMPTS}); the same proxy URL is reused for the API requests.`);
+        }
+
+        try {
+            const browserSession = await bootstrapKyeroBrowser({ proxyUrl, bootstrapUrl });
+            return {
+                proxyConfiguration,
+                proxyConfigInput,
+                bootstrapUrl,
+                proxyUrl,
+                ...browserSession,
+                refreshCount: 0,
+            };
+        } catch (error) {
+            lastError = error;
+            if (attempt >= MAX_BOOTSTRAP_ATTEMPTS) break;
+            log.warning(`Kyero bootstrap attempt ${attempt}/${MAX_BOOTSTRAP_ATTEMPTS} failed; retrying with a fresh proxy identity.`, { error: error.message });
+            await sleep(1000 + Math.floor(Math.random() * 1500));
+        }
     }
 
-    if (proxyUrl && proxyGroups.includes('RESIDENTIAL')) {
-        log.info('Using one Apify Residential session for Patchright bootstrap and API requests.');
-    } else if (proxyUrl) {
-        log.info('Reusing the configured proxy URL for Patchright bootstrap and API requests.');
-    }
-
-    const browserSession = await bootstrapKyeroBrowser({ proxyUrl, bootstrapUrl });
-    return {
-        proxyConfiguration,
-        proxyConfigInput,
-        bootstrapUrl,
-        proxyUrl,
-        ...browserSession,
-        refreshCount: 0,
-    };
+    throw lastError ?? new Error('Kyero browser bootstrap failed.');
 }
 
 async function refreshKyeroBrowserSession(session) {
@@ -393,12 +409,17 @@ async function requestUrl({
     for (let attempt = 1; attempt <= MAX_HTTP_ATTEMPTS; attempt++) {
         try {
             const response = await fetchKyeroFromPatchright({ url, session, referer, remixData });
-            if (
-                response.statusCode === 403
-                || response.isCloudflareChallenge
-                || !RETRYABLE_STATUS_CODES.has(response.statusCode)
-                || attempt >= MAX_HTTP_ATTEMPTS
-            ) {
+            const accessBlocked = response.statusCode === 403 || response.isCloudflareChallenge;
+            if (accessBlocked) {
+                if (attempt >= MAX_HTTP_ATTEMPTS || session.refreshCount >= MAX_SESSION_REFRESHES) {
+                    return response;
+                }
+                log.warning(`Kyero denied access (HTTP ${response.statusCode}) for the current browser session; refreshing it with a fresh proxy identity.`, { attempt });
+                await sleep(1000 + Math.floor(Math.random() * 1500));
+                await refreshKyeroBrowserSession(session);
+                continue;
+            }
+            if (!RETRYABLE_STATUS_CODES.has(response.statusCode) || attempt >= MAX_HTTP_ATTEMPTS) {
                 return response;
             }
 
@@ -636,17 +657,14 @@ await Actor.main(async () => {
         throw new Error('Provide either "urls" or at least one of "keyword"/"location".');
     }
 
-    let bootstrapUrl = searchUrls[0]?.toString();
-    if (!bootstrapUrl) {
-        const suggestionsUrl = new URL('/kyero-api/location-suggestions', KYERO_ORIGIN);
-        suggestionsUrl.searchParams.set('locale', locale);
-        suggestionsUrl.searchParams.set('q', uniqueCandidates[0]);
-        bootstrapUrl = suggestionsUrl.toString();
-    }
+    const bootstrapUrl = new URL('/kyero-api/location-suggestions', KYERO_ORIGIN);
+    bootstrapUrl.searchParams.set('locale', locale);
+    bootstrapUrl.searchParams.set('q', uniqueCandidates[0] || 'kyero');
+    const bootstrapTarget = bootstrapUrl.toString();
     const session = await createKyeroBrowserSession({
         proxyConfiguration,
         proxyConfigInput,
-        bootstrapUrl,
+        bootstrapUrl: bootstrapTarget,
     });
 
     try {

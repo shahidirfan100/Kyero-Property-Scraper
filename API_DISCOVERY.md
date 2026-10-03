@@ -164,3 +164,40 @@ Local validation: all five regression tests and JSON/syntax checks passed. The c
 
 A cloud run failed during browser bootstrap with Chromium `net::ERR_INVALID_AUTH_CREDENTIALS`, before any Kyero API request was made. The actor had passed Apify's full credential-bearing proxy URL as Patchright's `proxy.server` value. The browser configuration now separates the proxy address from its decoded username and password, while keeping the same Residential session bound to the browser context. Credentials are not logged, and the actor does not fall back to a direct connection. This code-level correction still requires a cloud run to verify against Apify Residential; it does not establish that Kyero will clear its challenge.
 
+## Bootstrap IP variance and impit recheck (2026-10-03)
+
+The 2026-10-02 QA failure was reproduced locally against real Apify Residential Proxy with the published code: `bootstrapKyeroBrowser` reached the bootstrap URL but the navigation stayed at HTTP 403 with title `Just a moment...` and no `cf_clearance` cookie, so API requests never started. Live probes then isolated the cause.
+
+### Impit profile recheck
+
+`impit@0.14.5` was installed separately and every documented profile was tested directly against both Kyero endpoints (no proxy): `chrome`, `chrome100/101/104/107/110/116/124/125/131/136/142/151`, `firefox`, `firefox128/133/135/144`, `okhttp/okhttp3/okhttp4/okhttp5`, `ios18`. All profiles returned the Cloudflare `HTTP 403` challenge HTML, or a connection-level error (older Chrome profiles and `ios18`). The `403` bodies contained the literal string `properties`, which is why a naive body marker can look like data; the content-type remained `text/html`, not `text/x-script`. **No impit profile works against Kyero.** The browser transport remains required.
+
+### Proxy identity variance
+
+The same Patchright configuration was repeated with a fresh Apify Residential session per run:
+
+| Attempt target | Group | Result |
+|---|---|---|
+| `location-suggestions` JSON endpoint | RESIDENTIAL | 4/5 runs returned HTTP 200 with the suggestions JSON; 1 run was challenged (`Checking your browser — Kyero`) |
+| Search HTML page (`/en/italy-property-for-sale-0l55732`) | RESIDENTIAL | 0/3 runs cleared; heavy `Just a moment...` challenge |
+| Direct browser navigation to the `.data` route | RESIDENTIAL | 0/3 runs; Kyero WAF `Access blocked — Kyero` (document navigation only) |
+| `UNBLOCKER` group | UNBLOCKER | Browser TLS error `ERR_CERT_AUTHORITY_INVALID`; Unblocker performs HTTPS interception and is incompatible with this browser flow |
+| Full keyword flow (bootstrap on JSON, then in-page `.data` fetch) | RESIDENTIAL | HTTP 200, `text/x-script`, 57,296-byte packed payload with properties; location-suggestions also 200 |
+
+The blocking is **residential IP-reputation dependent**, not a decoder or request-shape problem. The location-suggestions endpoint is the least-protected same-origin entry point; the search HTML page is the most protected.
+
+### Correction
+
+- Bootstrap now always targets the same-origin `kyero-api/location-suggestions` JSON endpoint for every search mode, instead of the aggressively challenged search HTML page.
+- `createKyeroBrowserSession` retries bootstrap up to three times, each with a fresh Residential session (new IP) and a fresh browser profile.
+- `requestUrl` treats a `403` or detected challenge on an in-page API request as retryable and refreshes the browser session with a new proxy identity, up to a bounded limit.
+- `access blocked` was added to the challenge/block detection pattern so a hard WAF block is retried instead of being parsed as data.
+- Corrected the persistent-context launch: `viewport: null` (the Node.js option; `noViewport` was Python-only and silently ignored) plus `ignoreDefaultArgs: ['--enable-automation']`.
+
+### Validation
+
+With the fix, a local `apify run` through real Apify Residential Proxy (keyword `italy`, 1 result, 1 page) completed: bootstrap succeeded on the first attempt, keyword discovery matched 10 locations, and one full property record was saved to the dataset. `npm run lint` passes with zero errors and all five regression tests pass.
+
+`UNBLOCKER` remains rejected: its TLS interception breaks the browser context. Existing saved inputs or tasks that explicitly set `useApifyProxy: false` still need to be updated to use Residential.
+
+
